@@ -1,0 +1,31 @@
+version: '3'
+
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    restart: always
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - NODE_ENV=production
+      # Important for security - generate a random string
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:-your-secret-encryption-key}
+      # Uncomment the following for timezone configuration
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-UTC}
+      # When ready to add Postgres later
+      # - DB_TYPE=postgresdb
+      # - DB_POSTGRESDB_DATABASE=${DB_POSTGRESDB_DATABASE}
+      # - DB_POSTGRESDB_HOST=postgres
+      # - DB_POSTGRESDB_PORT=${DB_POSTGRESDB_PORT:-5432}
+      # - DB_POSTGRESDB_USER=${DB_POSTGRESDB_USER}
+      # - DB_POSTGRESDB_PASSWORD=${DB_POSTGRESDB_PASSWORD}
+    volumes:
+      - ./n8n_data:/home/node/.n8n
+      - ./local-files:/files
+    
+volumes:
+  n8n_data:
+    driver: local 
