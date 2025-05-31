@@ -20,17 +20,39 @@ services:
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:-your-secret-encryption-key}
       # Uncomment the following for timezone configuration
       - GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-UTC}
-      # When ready to add Postgres later
-      # - DB_TYPE=postgresdb
-      # - DB_POSTGRESDB_DATABASE=${DB_POSTGRESDB_DATABASE}
-      # - DB_POSTGRESDB_HOST=postgres
-      # - DB_POSTGRESDB_PORT=${DB_POSTGRESDB_PORT:-5432}
-      # - DB_POSTGRESDB_USER=${DB_POSTGRESDB_USER}
-      # - DB_POSTGRESDB_PASSWORD=${DB_POSTGRESDB_PASSWORD}
+      # Database configuration - uncomment to use PostgreSQL instead of SQLite
+      - DB_TYPE=${DB_TYPE:-sqlite}
+      - DB_POSTGRESDB_DATABASE=${DB_POSTGRESDB_DATABASE:-n8n}
+      - DB_POSTGRESDB_HOST=${DB_POSTGRESDB_HOST:-postgres}
+      - DB_POSTGRESDB_PORT=${DB_POSTGRESDB_PORT:-5432}
+      - DB_POSTGRESDB_USER=${DB_POSTGRESDB_USER:-n8n}
+      - DB_POSTGRESDB_PASSWORD=${DB_POSTGRESDB_PASSWORD:-n8n}
     volumes:
       - ./n8n_data:/home/node/.n8n
       - ./local-files:/files
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17-alpine
+    restart: always
+    environment:
+      - POSTGRES_USER=${DB_POSTGRESDB_USER:-n8n}
+      - POSTGRES_PASSWORD=${DB_POSTGRESDB_PASSWORD:-n8n}
+      - POSTGRES_DB=${DB_POSTGRESDB_DATABASE:-n8n}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_POSTGRESDB_USER:-n8n} -d ${DB_POSTGRESDB_DATABASE:-n8n}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - postgres
 
 volumes:
   n8n_data:
+    driver: local
+  postgres_data:
     driver: local
