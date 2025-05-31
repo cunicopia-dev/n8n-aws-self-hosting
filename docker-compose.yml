@@ -6,6 +6,11 @@ services:
     restart: always
     ports:
       - "5678:5678"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - N8N_HOST=localhost
       - N8N_PORT=5678
@@ -25,7 +30,7 @@ services:
     volumes:
       - ./n8n_data:/home/node/.n8n
       - ./local-files:/files
-    
+
 volumes:
   n8n_data:
-    driver: local 
+    driver: local
