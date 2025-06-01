@@ -1,5 +1,10 @@
 # n8n Self-Hosted Workflow Automation
 
+![License](https://img.shields.io/badge/license-MIT-blue)
+![AWS Deployment](https://img.shields.io/badge/deployment-AWS-orange)
+![n8n Version](https://img.shields.io/badge/n8n-latest-green)
+![Architecture](https://img.shields.io/badge/architecture-ARM64-red)
+
 Self-hosted n8n automation stack with secure AWS deployment, PostgreSQL support, and full CloudFormation infrastructure.
 
 ## Table of Contents
@@ -16,7 +21,9 @@ Self-hosted n8n automation stack with secure AWS deployment, PostgreSQL support,
 - [Project Structure](#project-structure)
 - [Configuration](#configuration)
 - [Backup and Restore](#backup-and-restore)
+- [Security](#security)
 - [Troubleshooting](#troubleshooting)
+- [FAQ](#faq)
 - [Extend This Stack](#extend-this-stack)
 - [Contributing](#contributing)
 
@@ -258,18 +265,37 @@ For a complete list of configuration options, check `.env.example` which include
 - S3 file storage
 - Execution timeouts
 
-### Security Considerations
+## Security
 
-- Encryption key is automatically generated on first run
-- PostgreSQL passwords are randomly generated when using `--postgres` flag
-- AWS deployment uses SSM for access (no SSH keys or public IPs)
-- Security group allows outbound traffic only
+### Why SSM over SSH?
+
+SSM (Systems Manager) provides several advantages over traditional SSH access:
+
+- **No SSH keys to manage** - Access controlled via AWS IAM
+- **No public IPs needed** - Instances stay in private subnets
+- **Session auditing** - All access logged via AWS CloudTrail
+- **Easy automation** - Simple `aws ssm start-session` commands
+
+### Security Features
+
+| Feature | Description |
+|---------|-------------|
+| 🔐 No Public IPs | Instances deployed in private subnets only |
+| 🔑 IAM-Based Access | All access controlled via instance profiles |
+| 📦 Encrypted Secrets | Auto-generated encryption keys and passwords |
+| 🛡️ SSM Access Only | No SSH keys, auditable access via SSM |
+| 🔒 Outbound Only | Security group blocks all inbound traffic |
+| 🎲 Random Passwords | Auto-generated PostgreSQL and encryption keys |
+
+### ARM64 Compatibility
+
+This deployment uses ARM64-based `t4g` instances for cost efficiency. All Docker images in the stack support ARM64 architecture.
 
 ## Backup and Restore
 
 ### Local Deployment
 
-SQLite:
+**SQLite:**
 ```bash
 # Backup
 cp -r n8n_data n8n_data_backup
@@ -278,18 +304,100 @@ cp -r n8n_data n8n_data_backup
 cp -r n8n_data_backup n8n_data
 ```
 
-PostgreSQL:
+**PostgreSQL:**
 ```bash
-# Backup
+# Manual backup
 docker compose exec postgres pg_dump -U n8n n8n > backup.sql
 
-# Restore
+# Manual restore
 docker compose exec -T postgres psql -U n8n n8n < backup.sql
 ```
 
 ### AWS Deployment
 
-Use AWS Systems Manager to run backup commands on the EC2 instance, storing backups in S3.
+**Production Backup Strategy:**
+
+1. **Create a backup script on your EC2 instance:**
+
+```bash
+# SSH into your instance
+aws ssm start-session --target <instance-id>
+
+# Create backup script
+sudo tee /opt/backup-n8n.sh > /dev/null <<'EOF'
+#!/bin/bash
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+BUCKET_NAME="${S3_BUCKET}"
+BACKUP_FILE="/tmp/n8n_backup_${TIMESTAMP}.sql"
+
+# Create PostgreSQL backup
+cd /opt/n8n-aws-self-hosting
+docker compose exec -T postgres pg_dump -U n8n n8n > "$BACKUP_FILE"
+
+# Compress the backup
+gzip "$BACKUP_FILE"
+
+# Upload to S3
+aws s3 cp "${BACKUP_FILE}.gz" "s3://${BUCKET_NAME}/backups/n8n_backup_${TIMESTAMP}.sql.gz"
+
+# Cleanup local file
+rm "${BACKUP_FILE}.gz"
+
+# Keep only last 30 days of backups in S3
+aws s3api list-objects-v2 --bucket "$BUCKET_NAME" --prefix "backups/" \
+  --query 'Contents[?LastModified<=`'$(date -d '30 days ago' --iso-8601)'`].[Key]' \
+  --output text | xargs -I {} aws s3 rm "s3://${BUCKET_NAME}/{}"
+
+echo "Backup completed: n8n_backup_${TIMESTAMP}.sql.gz"
+EOF
+
+# Make executable
+sudo chmod +x /opt/backup-n8n.sh
+```
+
+2. **Set up automated daily backups with cron:**
+
+```bash
+# Add to crontab for daily backups at 2 AM
+sudo crontab -e
+
+# Add this line:
+0 2 * * * /opt/backup-n8n.sh >> /var/log/n8n-backup.log 2>&1
+```
+
+3. **Restore from S3 backup:**
+
+```bash
+# List available backups
+aws s3 ls s3://${S3_BUCKET}/backups/
+
+# Download and restore a specific backup
+BACKUP_FILE="n8n_backup_20241201_020000.sql.gz"
+aws s3 cp "s3://${S3_BUCKET}/backups/${BACKUP_FILE}" /tmp/
+gunzip "/tmp/${BACKUP_FILE}"
+
+# Stop n8n, restore database, restart
+cd /opt/n8n-aws-self-hosting
+docker compose down
+docker compose up -d postgres
+sleep 10
+docker compose exec -T postgres psql -U n8n n8n < "/tmp/${BACKUP_FILE%.gz}"
+docker compose up -d n8n
+```
+
+**Weekly Full Instance Backup:**
+
+For additional safety, consider weekly EBS snapshots of your EC2 volume:
+
+```bash
+# Create a snapshot via AWS CLI
+INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+VOLUME_ID=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID \
+  --query 'Reservations[0].Instances[0].BlockDeviceMappings[0].Ebs.VolumeId' --output text)
+
+aws ec2 create-snapshot --volume-id $VOLUME_ID \
+  --description "n8n Weekly Backup $(date +%Y-%m-%d)"
+```
 
 ## Troubleshooting
 
@@ -336,6 +444,25 @@ docker compose logs -f
 docker compose logs -f n8n
 docker compose logs -f postgres
 ```
+
+## FAQ
+
+**Q: Can I expose n8n to the public internet?**
+A: Yes, but you'll need to alter the architecture slightly. One strategy is to add an Application Load Balancer, use Route53 and ACM for DNS and SSL certificate management. For enterprise deployments, included a layer 7 web application firewall would be a good idea. Another strategy is to use Cloudflare which is a cheaper option. 
+
+The current setup prioritizes security with private access only - exposing n8n across the public internet comes with some security risks that you should be wary of. 
+
+**Q: How do I update n8n to the latest version?**
+A: For local: `docker compose pull && docker compose down && docker compose up -d`. For AWS: redeploy the stack or SSH in and run the same commands.
+
+**Q: Can I use RDS instead of local PostgreSQL?**
+A: Yes! Set the `DB_POSTGRESDB_HOST` to your RDS endpoint in the `.env` file and remove the postgres service from docker-compose.yml.
+
+**Q: What if I already have PostgreSQL running on port 5432?**
+A: Change the port mapping in docker-compose.yml from `"5432:5432"` to something like `"5433:5432"`.
+
+**Q: How do I backup my data?**
+A: See the [Backup and Restore](#backup-and-restore) section above for detailed instructions.
 
 ## Contributing
 
