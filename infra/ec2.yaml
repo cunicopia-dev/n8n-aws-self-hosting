@@ -120,9 +120,9 @@ Resources:
             
             # Clone repository
             cd /home/n8n
-            git clone https://github.com/cunicopia-dev/mir-n8n.git
-            cd mir-n8n
-            chown -R n8n:n8n /home/n8n/mir-n8n
+            git clone https://github.com/cunicopia-dev/n8n-aws-self-hosting.git
+            cd n8n-aws-self-hosting
+            chown -R n8n:n8n /home/n8n/n8n-aws-self-hosting
             
             # Generate encryption key
             N8N_ENCRYPTION_KEY=$(openssl rand -hex 24)
@@ -145,7 +145,7 @@ Resources:
             chown n8n:n8n .env
             
             # Start n8n
-            sudo -u n8n bash -c "cd /home/n8n/mir-n8n && ${UsePostgresDB ? 'docker-compose --profile postgres up -d' : 'docker-compose up -d'}"
+            sudo -u n8n bash -c "cd /home/n8n/n8n-aws-self-hosting && ${UsePostgresDB ? 'docker-compose --profile postgres up -d' : 'docker-compose up -d'}"
             
             # Setup CloudWatch logs
             yum install -y amazon-cloudwatch-agent
