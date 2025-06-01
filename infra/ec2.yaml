@@ -109,10 +109,15 @@ Resources:
             curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-aarch64 -o /usr/local/lib/docker/cli-plugins/docker-compose
             chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
             
-            # Clone repository  
-            cd /opt
-            git clone https://github.com/cunicopia-dev/mir-n8n.git
-            cd mir-n8n
+            # Create n8n user
+            useradd -m -s /bin/bash n8n
+            usermod -aG docker n8n
+            
+            # Clone repository
+            cd /home/n8n
+            git clone https://github.com/cunicopia-dev/n8n-aws-self-hosting.git
+            cd n8n-aws-self-hosting
+            chown -R n8n:n8n /home/n8n/n8n-aws-self-hosting
             
             # Create directories with proper permissions for Docker
             mkdir -p n8n_data local-files
