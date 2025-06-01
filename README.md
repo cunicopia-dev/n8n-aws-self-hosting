@@ -24,8 +24,8 @@ Self-hosted n8n automation stack with secure AWS deployment, PostgreSQL support,
 
 1. Clone this repository:
 ```bash
-git clone https://github.com/cunicopia-dev/mir-n8n.git
-cd mir-n8n
+git clone https://github.com/cunicopia-dev/n8n-aws-self-hosting.git
+cd n8n-aws-self-hosting
 ```
 
 2. Run the installation script:
@@ -200,7 +200,7 @@ Add `--postgres` to use PostgreSQL instead of SQLite.
 ## Project Structure
 
 ```
-mir-n8n/
+n8n-aws-self-hosting/
 ├── docker-compose.yml      # Docker Compose configuration
 ├── install-n8n.sh         # Installation script
 ├── .env                   # Environment configuration (created on first run)
