@@ -27,19 +27,10 @@ Parameters:
     Type: String
     Description: Name of the S3 bucket for n8n files
     Default: ''
-  
-  UsePostgres:
-    Type: String
-    Default: 'false'
-    AllowedValues:
-      - 'true'
-      - 'false'
-    Description: Whether to use PostgreSQL instead of SQLite
 
 Conditions:
   HasInstanceProfile: !Not [!Equals [!Ref InstanceProfileName, '']]
   HasS3Bucket: !Not [!Equals [!Ref S3BucketName, '']]
-  UsePostgresDB: !Equals [!Ref UsePostgres, 'true']
 
 Resources:
   N8nSecurityGroup:
@@ -65,7 +56,7 @@ Resources:
     Properties:
       LaunchTemplateName: !Sub 'n8n-lt-${AWS::StackName}'
       LaunchTemplateData:
-        ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-arm64-gp2}}'
+        ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}'
         InstanceType: !Ref InstanceType
         IamInstanceProfile:
           !If
@@ -103,10 +94,14 @@ Resources:
           Fn::Base64: !Sub |
             #!/bin/bash
             # Update system
-            yum update -y
+            dnf update -y
             
-            # Install Docker
-            yum install -y docker git
+            # Install Docker and PostgreSQL client tools
+            dnf install -y docker git
+            # Install PostgreSQL client - try 17 first, fallback to 16
+            dnf install -y postgresql17 || dnf install -y postgresql16 || dnf install -y postgresql15
+            
+            # Start Docker
             systemctl start docker
             systemctl enable docker
             
@@ -124,31 +119,36 @@ Resources:
             cd mir-n8n
             chown -R n8n:n8n /home/n8n/mir-n8n
             
-            # Generate encryption key
+            # Generate encryption key and PostgreSQL password
             N8N_ENCRYPTION_KEY=$(openssl rand -hex 24)
+            POSTGRES_PASSWORD=$(openssl rand -hex 16)
             
-            # Create .env file
-            cat > .env <<EOF
-            N8N_ENCRYPTION_KEY=$N8N_ENCRYPTION_KEY
+            # Create .env file with PostgreSQL as default
+            cat > .env <<'ENVFILE'
+            N8N_ENCRYPTION_KEY=${!N8N_ENCRYPTION_KEY}
             GENERIC_TIMEZONE=UTC
-            ${UsePostgresDB ? 'DB_TYPE=postgresdb' : 'DB_TYPE=sqlite'}
-            ${UsePostgresDB ? 'DB_POSTGRESDB_DATABASE=n8n' : ''}
-            ${UsePostgresDB ? 'DB_POSTGRESDB_HOST=postgres' : ''}
-            ${UsePostgresDB ? 'DB_POSTGRESDB_PORT=5432' : ''}
-            ${UsePostgresDB ? 'DB_POSTGRESDB_USER=n8n' : ''}
-            ${UsePostgresDB ? 'DB_POSTGRESDB_PASSWORD='$(openssl rand -hex 16) : ''}
-            ${HasS3Bucket ? 'S3_BUCKET=' + S3BucketName : ''}
-            EOF
+            DB_TYPE=postgresdb
+            DB_POSTGRESDB_DATABASE=n8n
+            DB_POSTGRESDB_HOST=postgres
+            DB_POSTGRESDB_PORT=5432
+            DB_POSTGRESDB_USER=n8n
+            DB_POSTGRESDB_PASSWORD=${!POSTGRES_PASSWORD}
+            S3_BUCKET=${S3BucketName}
+            ENVFILE
+            
+            # Replace the variables in the .env file
+            sed -i "s/\${!N8N_ENCRYPTION_KEY}/$N8N_ENCRYPTION_KEY/g" .env
+            sed -i "s/\${!POSTGRES_PASSWORD}/$POSTGRES_PASSWORD/g" .env
             
             # Set permissions
             chmod 600 .env
             chown n8n:n8n .env
             
-            # Start n8n
-            sudo -u n8n bash -c "cd /home/n8n/mir-n8n && ${UsePostgresDB ? 'docker-compose --profile postgres up -d' : 'docker-compose up -d'}"
+            # Start n8n with PostgreSQL
+            sudo -u n8n bash -c "cd /home/n8n/mir-n8n && docker-compose --profile postgres up -d"
             
             # Setup CloudWatch logs
-            yum install -y amazon-cloudwatch-agent
+            dnf install -y amazon-cloudwatch-agent
             cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<EOF
             {
               "logs": {
