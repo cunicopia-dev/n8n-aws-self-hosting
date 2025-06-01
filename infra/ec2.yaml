@@ -27,19 +27,9 @@ Parameters:
     Type: String
     Description: Name of the S3 bucket for n8n files
     Default: ''
-  
-  UsePostgres:
-    Type: String
-    Default: 'false'
-    AllowedValues:
-      - 'true'
-      - 'false'
-    Description: Whether to use PostgreSQL instead of SQLite
 
 Conditions:
   HasInstanceProfile: !Not [!Equals [!Ref InstanceProfileName, '']]
-  HasS3Bucket: !Not [!Equals [!Ref S3BucketName, '']]
-  UsePostgresDB: !Equals [!Ref UsePostgres, 'true']
 
 Resources:
   N8nSecurityGroup:
@@ -65,7 +55,7 @@ Resources:
     Properties:
       LaunchTemplateName: !Sub 'n8n-lt-${AWS::StackName}'
       LaunchTemplateData:
-        ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-arm64-gp2}}'
+        ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}'
         InstanceType: !Ref InstanceType
         IamInstanceProfile:
           !If
@@ -103,52 +93,56 @@ Resources:
           Fn::Base64: !Sub |
             #!/bin/bash
             # Update system
-            yum update -y
+            dnf update -y
             
-            # Install Docker
-            yum install -y docker git
+            # Install Docker and PostgreSQL client tools
+            dnf install -y docker git
+            # Install PostgreSQL client - try 17 first, fallback to 16
+            dnf install -y postgresql17 || dnf install -y postgresql16 || dnf install -y postgresql15
+            
+            # Start Docker
             systemctl start docker
             systemctl enable docker
             
-            # Install Docker Compose
-            curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-            chmod +x /usr/local/bin/docker-compose
+            # Install Docker Compose plugin
+            mkdir -p /usr/local/lib/docker/cli-plugins/
+            curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-aarch64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+            chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
             
-            # Create n8n user
-            useradd -m -s /bin/bash n8n
-            usermod -aG docker n8n
-            
-            # Clone repository
-            cd /home/n8n
+            # Clone repository  
+            cd /opt
             git clone https://github.com/cunicopia-dev/mir-n8n.git
             cd mir-n8n
-            chown -R n8n:n8n /home/n8n/mir-n8n
             
-            # Generate encryption key
-            N8N_ENCRYPTION_KEY=$(openssl rand -hex 24)
+            # Create directories with proper permissions for Docker
+            mkdir -p n8n_data local-files
+            chmod -R 777 n8n_data local-files
             
-            # Create .env file
+            # Create .env file with PostgreSQL
             cat > .env <<EOF
-            N8N_ENCRYPTION_KEY=$N8N_ENCRYPTION_KEY
+            N8N_ENCRYPTION_KEY=$(openssl rand -hex 24)
             GENERIC_TIMEZONE=UTC
-            ${UsePostgresDB ? 'DB_TYPE=postgresdb' : 'DB_TYPE=sqlite'}
-            ${UsePostgresDB ? 'DB_POSTGRESDB_DATABASE=n8n' : ''}
-            ${UsePostgresDB ? 'DB_POSTGRESDB_HOST=postgres' : ''}
-            ${UsePostgresDB ? 'DB_POSTGRESDB_PORT=5432' : ''}
-            ${UsePostgresDB ? 'DB_POSTGRESDB_USER=n8n' : ''}
-            ${UsePostgresDB ? 'DB_POSTGRESDB_PASSWORD='$(openssl rand -hex 16) : ''}
-            ${HasS3Bucket ? 'S3_BUCKET=' + S3BucketName : ''}
+            DB_TYPE=postgresdb
+            DB_POSTGRESDB_DATABASE=n8n
+            DB_POSTGRESDB_HOST=postgres
+            DB_POSTGRESDB_PORT=5432
+            DB_POSTGRESDB_USER=n8n
+            DB_POSTGRESDB_PASSWORD=$(openssl rand -hex 16)
+            S3_BUCKET=${S3BucketName}
+            N8N_DIAGNOSTICS_ENABLED=false
             EOF
             
-            # Set permissions
-            chmod 600 .env
-            chown n8n:n8n .env
+            # Start n8n with PostgreSQL
+            docker compose --profile postgres up -d
             
-            # Start n8n
-            sudo -u n8n bash -c "cd /home/n8n/mir-n8n && ${UsePostgresDB ? 'docker-compose --profile postgres up -d' : 'docker-compose up -d'}"
+            # Add ec2-user to docker group for SSM sessions
+            usermod -aG docker ec2-user
+            
+            # Wait for containers to be healthy
+            sleep 30
             
             # Setup CloudWatch logs
-            yum install -y amazon-cloudwatch-agent
+            dnf install -y amazon-cloudwatch-agent
             cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<EOF
             {
               "logs": {
