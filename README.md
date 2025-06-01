@@ -2,21 +2,42 @@
 
 Self-hosted n8n automation stack with secure AWS deployment, PostgreSQL support, and full CloudFormation infrastructure.
 
-## Built For
+## Table of Contents
 
-- 🤖 Internal agents (e.g. GA4 → Slack summaries)
-- 🧠 LLM-powered workflow automation
-- 💸 Low-cost backend for orchestrating cloud automations
-- 🔗 Connecting APIs without the managed service tax
+- [Why This Solution?](#why-this-solution)
+- [Features](#features)
+- [Quick Start](#quick-start)
+  - [Local Development](#local-development)
+  - [Switching Database Backends](#switching-database-backends)
+- [AWS Deployment](#aws-deployment)
+  - [Architecture](#architecture)
+  - [Prerequisites](#prerequisites)
+  - [Deployment Steps](#deployment-steps)
+- [Project Structure](#project-structure)
+- [Configuration](#configuration)
+- [Backup and Restore](#backup-and-restore)
+- [Troubleshooting](#troubleshooting)
+- [Extend This Stack](#extend-this-stack)
+- [Contributing](#contributing)
+
+## Why This Solution?
+
+- 💰 **Cost-Optimized**: $5-10/month vs $25+ for managed solutions
+- 🔒 **Secure by Default**: Private subnet deployment, SSM access only, no public IPs
+- 🚀 **Production-Ready**: Auto-healing via ASG, automated backups, CloudWatch monitoring
+- 🛠️ **Zero Lock-in**: Your data, your infrastructure, export and migrate anytime
+- 📦 **Simple Architecture**: Just EC2 + PostgreSQL, no Kubernetes complexity
+- ⚡ **Infrastructure as Code**: Fully automated CloudFormation deployment
+- 🎯 **Single-Command Deploy**: From zero to running in ~5 minutes
 
 ## Features
 
-- 🐳 Docker Compose based deployment
-- 🗄️ Optional PostgreSQL backend (defaults to SQLite)
-- 🔒 Automatic encryption key generation
-- 📁 Persistent data storage
-- ☁️ AWS CloudFormation templates for production deployment
-- 🔐 Secure AWS deployment with SSM port forwarding
+- Docker Compose based deployment
+- PostgreSQL backend 
+- Automatic encryption key generation
+- Persistent data storage
+- AWS CloudFormation templates for production deployment
+- Secure AWS deployment with SSM port forwarding
 
 ## Quick Start
 
