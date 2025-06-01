@@ -2,15 +2,28 @@
 
 # Parse command line arguments
 USE_POSTGRES=false
+CLEAN_DATA=false
+RESET_POSTGRES=false
 while [[ $# -gt 0 ]]; do
   case $1 in
     --postgres)
       USE_POSTGRES=true
       shift
       ;;
+    --clean)
+      CLEAN_DATA=true
+      shift
+      ;;
+    --reset-postgres)
+      RESET_POSTGRES=true
+      shift
+      ;;
     *)
       echo "Unknown option: $1"
-      echo "Usage: $0 [--postgres]"
+      echo "Usage: $0 [--postgres] [--clean] [--reset-postgres]"
+      echo "  --postgres: Use PostgreSQL instead of SQLite"
+      echo "  --clean: Remove existing n8n data (useful for encryption key issues)"
+      echo "  --reset-postgres: Remove PostgreSQL data and start fresh"
       exit 1
       ;;
   esac
@@ -59,6 +72,38 @@ if [ ! -f .env ]; then
   echo ".env file created with random encryption key"
 else
   echo ".env file already exists, using existing configuration"
+  
+  # Check if user wants to clean data
+  if [ "$CLEAN_DATA" = true ]; then
+    echo "Cleaning n8n data directory to resolve encryption key conflicts..."
+    rm -rf ./n8n_data/.n8n
+    echo "Data cleaned. N8n will start fresh."
+  fi
+fi
+
+# Always ensure the encryption key issue is handled
+if [ -f "./n8n_data/.n8n/config" ] && [ -f ".env" ]; then
+  # Check if there's a mismatch that could cause issues
+  if ! grep -q "N8N_ENCRYPTION_KEY" .env; then
+    echo "WARNING: No encryption key found in .env file!"
+    echo "This will cause issues. Please add N8N_ENCRYPTION_KEY to your .env file"
+    echo "or run with --clean flag to start fresh."
+    exit 1
+  fi
+fi
+
+# Stop any running containers first
+echo "Stopping any existing n8n containers..."
+docker compose --profile postgres down 2>/dev/null || true
+
+# Handle PostgreSQL reset if requested
+if [ "$RESET_POSTGRES" = true ]; then
+  echo "Resetting PostgreSQL data..."
+  # Force remove with -v flag to ensure volumes are removed
+  docker compose --profile postgres down -v 2>/dev/null || true
+  # Double-check and force remove the volume if it still exists
+  docker volume rm mir-n8n_postgres_data -f 2>/dev/null || true
+  echo "PostgreSQL data reset. A new database will be created."
 fi
 
 echo "Starting n8n with Docker Compose..."
@@ -69,6 +114,9 @@ else
   echo "Starting with SQLite..."
   docker compose up -d
 fi
+
+# Wait a moment for services to start
+sleep 3
 
 echo "n8n is now running at http://localhost:5678"
 echo "Use Ctrl+C to stop viewing logs or run 'docker compose down' to stop n8n"
