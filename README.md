@@ -99,7 +99,7 @@ graph TB
             subgraph "VPC"
                 ASG[Auto Scaling Group<br/>min=1, max=1]
                 LT[Launch Template]
-                EC2[EC2 Instance<br/>t4g.small/medium<br/>+ n8n + PostgreSQL]
+                EC2[EC2 Instance<br/>t4g.small/medium<br/>+ n8n + PostgreSQL 17]
             end
         end
         
@@ -129,16 +129,19 @@ graph TB
     style CF3 fill:#c8e6c9,color:#1b5e20
 ```
 
+**Note**: AWS deployments now default to PostgreSQL 17 for better performance and reliability. The EC2 instance includes PostgreSQL client tools for database management and backups.
+
 ### Prerequisites
 
 - **AWS CLI**: [Installation guide](https://aws.amazon.com/cli/)
 - **AWS SAM CLI**: [Installation guide](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
-- **Docker** and **Docker Compose** (for local development)
+- **AWS Session Manager Plugin**: [Installation guide](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) (required for SSM connections)
+- **Docker** and **Docker Compose v2.20.2+** (for local development)
 - AWS credentials configured (`aws configure`)
 - VPC with at least one subnet
 - Appropriate AWS permissions for CloudFormation, EC2, S3, IAM, and SSM
 
-> 💰 **Estimated Cost**: ~$10/mo using `t4g.small` + ~8 GB storage.  
+> 💰 **Estimated Cost**: With AWS EC2 RIs, you can get a t4g.small for as low as $5 a month. 
 > This setup is ideal for lean, production-grade automation infrastructure without the managed service tax.
 
 ### Deployment Steps
@@ -165,6 +168,8 @@ aws cloudformation create-stack \
 ```
 
 3. Deploy EC2 instance:
+
+- Make sure to replace the `VpcId` and the `SubnetId` with real values.
 ```bash
 aws cloudformation create-stack \
   --stack-name n8n-ec2 \
@@ -174,8 +179,7 @@ aws cloudformation create-stack \
     ParameterKey=SubnetId,ParameterValue=subnet-xxxxxx \
     ParameterKey=InstanceType,ParameterValue=t4g.small \
     ParameterKey=InstanceProfileName,ParameterValue=$(aws cloudformation describe-stacks --stack-name n8n-iam --query 'Stacks[0].Outputs[?OutputKey==`InstanceProfileName`].OutputValue' --output text) \
-    ParameterKey=S3BucketName,ParameterValue=$(aws cloudformation describe-stacks --stack-name n8n-s3 --query 'Stacks[0].Outputs[?OutputKey==`BucketName`].OutputValue' --output text) \
-    ParameterKey=UsePostgres,ParameterValue=false
+    ParameterKey=S3BucketName,ParameterValue=$(aws cloudformation describe-stacks --stack-name n8n-s3 --query 'Stacks[0].Outputs[?OutputKey==`BucketName`].OutputValue' --output text)
 ```
 
 4. Get your instance ID:
@@ -199,12 +203,14 @@ echo "Your instance ID is: $INSTANCE_ID"
 # Terminal 1 - SSH into the instance (optional)
 aws ssm start-session --target $INSTANCE_ID
 
-# Terminal 2 - Port forward n8n
+# Terminal 2 - Port forward n8n (requires Session Manager plugin)
 aws ssm start-session \
   --target $INSTANCE_ID \
   --document-name AWS-StartPortForwardingSession \
   --parameters '{"portNumber":["5678"],"localPortNumber":["5678"]}'
 ```
+
+> **Note**: If you get an error about the Session Manager plugin, make sure you've installed it from the prerequisites above.
 
 6. Access n8n at http://localhost:5678
 
@@ -215,8 +221,6 @@ If you prefer automation, there's a simple deployment script:
 cd infra
 ./deploy.sh --vpc-id vpc-xxxxxx --subnet-id subnet-xxxxxx
 ```
-
-Add `--postgres` to use PostgreSQL instead of SQLite.
 
 ## Project Structure
 
@@ -294,6 +298,32 @@ Use AWS Systems Manager to run backup commands on the EC2 instance, storing back
 1. **Port already in use**: Change the port mapping in `docker-compose.yml`
 2. **Permission denied**: Ensure proper permissions on `n8n_data` and `local-files` directories
 3. **Database connection failed**: Check PostgreSQL container health and credentials in `.env`
+4. **Encryption key mismatch**: If you see encryption key errors after changing `.env`:
+   ```bash
+   ./install-n8n.sh --clean
+   ```
+   This removes the old config but preserves your workflows
+
+### PostgreSQL Connection Notes
+
+- The host should be `postgres` (the Docker service name), not `localhost`
+- The database name is `n8n` by default
+- Connection happens over Docker's internal network
+- To connect from your host machine for debugging:
+  ```bash
+  docker compose exec postgres psql -U n8n -d n8n
+  ```
+
+### Connecting with DBeaver/pgAdmin
+
+To connect from local database tools:
+- **Host**: localhost
+- **Port**: 5432 (see note below if you have conflicts)
+- **Database**: n8n
+- **Username**: n8n
+- **Password**: (from your .env file)
+
+> **Port Conflict Note**: If you already have PostgreSQL running locally on port 5432, you'll need to change the port mapping in `docker-compose.yml` from `"5432:5432"` to something like `"5433:5432"`, then connect to port 5433 instead.
 
 ### Logs
 
