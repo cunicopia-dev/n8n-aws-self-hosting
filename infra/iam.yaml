@@ -1,0 +1,95 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'IAM roles and policies for n8n EC2 instance'
+
+Parameters:
+  S3BucketArn:
+    Type: String
+    Description: ARN of the S3 bucket for n8n files
+    Default: ''
+
+Conditions:
+  HasS3Bucket: !Not [!Equals [!Ref S3BucketArn, '']]
+
+Resources:
+  N8nInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'n8n-instance-role-${AWS::Region}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore'
+        - 'arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy'
+      Policies:
+        - !If
+          - HasS3Bucket
+          - PolicyName: S3Access
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - 's3:GetObject'
+                    - 's3:PutObject'
+                    - 's3:DeleteObject'
+                    - 's3:ListBucket'
+                  Resource:
+                    - !Ref S3BucketArn
+                    - !Sub '${S3BucketArn}/*'
+          - !Ref 'AWS::NoValue'
+        - PolicyName: CloudWatchLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                  - 'logs:DescribeLogStreams'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/ec2/n8n/*'
+        - PolicyName: EC2Tags
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ec2:DescribeTags'
+                  - 'ec2:DescribeInstances'
+                Resource: '*'
+      Tags:
+        - Key: Application
+          Value: n8n
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  N8nInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub 'n8n-instance-profile-${AWS::Region}'
+      Roles:
+        - !Ref N8nInstanceRole
+
+Outputs:
+  InstanceRoleArn:
+    Description: ARN of the instance role
+    Value: !GetAtt N8nInstanceRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-InstanceRoleArn'
+  
+  InstanceProfileArn:
+    Description: ARN of the instance profile
+    Value: !GetAtt N8nInstanceProfile.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-InstanceProfileArn'
+  
+  InstanceProfileName:
+    Description: Name of the instance profile
+    Value: !Ref N8nInstanceProfile
+    Export:
+      Name: !Sub '${AWS::StackName}-InstanceProfileName'

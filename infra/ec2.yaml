@@ -1,0 +1,217 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'EC2 instance with Auto Scaling Group for n8n deployment'
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID where the instance will be deployed
+  
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet ID for the EC2 instance
+  
+  InstanceType:
+    Type: String
+    Default: t4g.small
+    AllowedValues:
+      - t4g.small
+      - t4g.medium
+    Description: EC2 instance type (ARM-based for cost efficiency)
+  
+  InstanceProfileName:
+    Type: String
+    Description: Name of the IAM instance profile
+    Default: ''
+  
+  S3BucketName:
+    Type: String
+    Description: Name of the S3 bucket for n8n files
+    Default: ''
+  
+  UsePostgres:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Whether to use PostgreSQL instead of SQLite
+
+Conditions:
+  HasInstanceProfile: !Not [!Equals [!Ref InstanceProfileName, '']]
+  HasS3Bucket: !Not [!Equals [!Ref S3BucketName, '']]
+  UsePostgresDB: !Equals [!Ref UsePostgres, 'true']
+
+Resources:
+  N8nSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub 'n8n-sg-${AWS::StackName}'
+      GroupDescription: Security group for n8n instance - outbound only
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub 'n8n-sg-${AWS::StackName}'
+        - Key: Application
+          Value: n8n
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  N8nLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub 'n8n-lt-${AWS::StackName}'
+      LaunchTemplateData:
+        ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-arm64-gp2}}'
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          !If
+            - HasInstanceProfile
+            - Name: !Ref InstanceProfileName
+            - !Ref 'AWS::NoValue'
+        SecurityGroupIds:
+          - !Ref N8nSecurityGroup
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: 30
+              VolumeType: gp3
+              DeleteOnTermination: true
+              Encrypted: true
+        MetadataOptions:
+          HttpTokens: required
+          HttpPutResponseHopLimit: 1
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub 'n8n-instance-${AWS::StackName}'
+              - Key: Application
+                Value: n8n
+              - Key: ManagedBy
+                Value: CloudFormation
+          - ResourceType: volume
+            Tags:
+              - Key: Name
+                Value: !Sub 'n8n-volume-${AWS::StackName}'
+              - Key: Application
+                Value: n8n
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            # Update system
+            yum update -y
+            
+            # Install Docker
+            yum install -y docker git
+            systemctl start docker
+            systemctl enable docker
+            
+            # Install Docker Compose
+            curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+            chmod +x /usr/local/bin/docker-compose
+            
+            # Create n8n user
+            useradd -m -s /bin/bash n8n
+            usermod -aG docker n8n
+            
+            # Clone repository
+            cd /home/n8n
+            git clone https://github.com/cunicopia-dev/mir-n8n.git
+            cd mir-n8n
+            chown -R n8n:n8n /home/n8n/mir-n8n
+            
+            # Generate encryption key
+            N8N_ENCRYPTION_KEY=$(openssl rand -hex 24)
+            
+            # Create .env file
+            cat > .env <<EOF
+            N8N_ENCRYPTION_KEY=$N8N_ENCRYPTION_KEY
+            GENERIC_TIMEZONE=UTC
+            ${UsePostgresDB ? 'DB_TYPE=postgresdb' : 'DB_TYPE=sqlite'}
+            ${UsePostgresDB ? 'DB_POSTGRESDB_DATABASE=n8n' : ''}
+            ${UsePostgresDB ? 'DB_POSTGRESDB_HOST=postgres' : ''}
+            ${UsePostgresDB ? 'DB_POSTGRESDB_PORT=5432' : ''}
+            ${UsePostgresDB ? 'DB_POSTGRESDB_USER=n8n' : ''}
+            ${UsePostgresDB ? 'DB_POSTGRESDB_PASSWORD='$(openssl rand -hex 16) : ''}
+            ${HasS3Bucket ? 'S3_BUCKET=' + S3BucketName : ''}
+            EOF
+            
+            # Set permissions
+            chmod 600 .env
+            chown n8n:n8n .env
+            
+            # Start n8n
+            sudo -u n8n bash -c "cd /home/n8n/mir-n8n && ${UsePostgresDB ? 'docker-compose --profile postgres up -d' : 'docker-compose up -d'}"
+            
+            # Setup CloudWatch logs
+            yum install -y amazon-cloudwatch-agent
+            cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<EOF
+            {
+              "logs": {
+                "logs_collected": {
+                  "files": {
+                    "collect_list": [
+                      {
+                        "file_path": "/var/log/messages",
+                        "log_group_name": "/aws/ec2/n8n/system",
+                        "log_stream_name": "{instance_id}/messages"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+            EOF
+            /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+
+  N8nAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub 'n8n-asg-${AWS::StackName}'
+      VPCZoneIdentifier:
+        - !Ref SubnetId
+      LaunchTemplate:
+        LaunchTemplateId: !Ref N8nLaunchTemplate
+        Version: !GetAtt N8nLaunchTemplate.LatestVersionNumber
+      MinSize: 1
+      MaxSize: 1
+      DesiredCapacity: 1
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 300
+      Tags:
+        - Key: Name
+          Value: !Sub 'n8n-asg-instance-${AWS::StackName}'
+          PropagateAtLaunch: true
+        - Key: Application
+          Value: n8n
+          PropagateAtLaunch: true
+        - Key: ManagedBy
+          Value: CloudFormation
+          PropagateAtLaunch: true
+
+Outputs:
+  AutoScalingGroupName:
+    Description: Name of the Auto Scaling Group
+    Value: !Ref N8nAutoScalingGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-ASGName'
+  
+  SecurityGroupId:
+    Description: ID of the security group
+    Value: !Ref N8nSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-SecurityGroupId'
+  
+  LaunchTemplateId:
+    Description: ID of the launch template
+    Value: !Ref N8nLaunchTemplate
+    Export:
+      Name: !Sub '${AWS::StackName}-LaunchTemplateId'
+  
+  InstanceId:
+    Description: Instance ID (retrieve using ASG describe-instances)
+    Value: !Sub 'Use "aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names ${N8nAutoScalingGroup}" to get instance ID'
