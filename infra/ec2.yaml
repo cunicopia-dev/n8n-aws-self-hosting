@@ -2,6 +2,12 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: 'EC2 instance with Auto Scaling Group for n8n deployment'
 
 Parameters:
+  Namespace:
+    Type: String
+    Description: Namespace/client identifier for isolated deployment
+    AllowedPattern: '^[a-z0-9-]+$'
+    ConstraintDescription: Must contain only lowercase letters, numbers, and hyphens
+  
   VpcId:
     Type: AWS::EC2::VPC::Id
     Description: VPC ID where the instance will be deployed
@@ -35,7 +41,7 @@ Resources:
   N8nSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: !Sub 'n8n-sg-${AWS::StackName}'
+      GroupName: !Sub 'n8n-${Namespace}-sg'
       GroupDescription: Security group for n8n instance - outbound only
       VpcId: !Ref VpcId
       SecurityGroupEgress:
@@ -44,16 +50,18 @@ Resources:
           Description: Allow all outbound traffic
       Tags:
         - Key: Name
-          Value: !Sub 'n8n-sg-${AWS::StackName}'
+          Value: !Sub 'n8n-${Namespace}-sg'
         - Key: Application
           Value: n8n
+        - Key: Namespace
+          Value: !Ref Namespace
         - Key: ManagedBy
           Value: CloudFormation
 
   N8nLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
-      LaunchTemplateName: !Sub 'n8n-lt-${AWS::StackName}'
+      LaunchTemplateName: !Sub 'n8n-${Namespace}-lt'
       LaunchTemplateData:
         ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}'
         InstanceType: !Ref InstanceType
@@ -78,7 +86,7 @@ Resources:
           - ResourceType: instance
             Tags:
               - Key: Name
-                Value: !Sub 'n8n-instance-${AWS::StackName}'
+                Value: !Sub 'n8n-${Namespace}-instance'
               - Key: Application
                 Value: n8n
               - Key: ManagedBy
@@ -86,7 +94,7 @@ Resources:
           - ResourceType: volume
             Tags:
               - Key: Name
-                Value: !Sub 'n8n-volume-${AWS::StackName}'
+                Value: !Sub 'n8n-${Namespace}-volume'
               - Key: Application
                 Value: n8n
         UserData:
@@ -170,7 +178,7 @@ Resources:
   N8nAutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
-      AutoScalingGroupName: !Sub 'n8n-asg-${AWS::StackName}'
+      AutoScalingGroupName: !Sub 'n8n-${Namespace}-asg'
       VPCZoneIdentifier:
         - !Ref SubnetId
       LaunchTemplate:
@@ -183,10 +191,12 @@ Resources:
       HealthCheckGracePeriod: 300
       Tags:
         - Key: Name
-          Value: !Sub 'n8n-asg-instance-${AWS::StackName}'
+          Value: !Sub 'n8n-${Namespace}-asg-instance'
           PropagateAtLaunch: true
         - Key: Application
           Value: n8n
+        - Key: Namespace
+          Value: !Ref Namespace
           PropagateAtLaunch: true
         - Key: ManagedBy
           Value: CloudFormation
