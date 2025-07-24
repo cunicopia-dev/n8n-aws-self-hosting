@@ -163,6 +163,7 @@ Resources:
             aws s3 cp "s3://${S3BucketName}/scripts/restore-n8n.sh" /opt/n8n-scripts/ || echo "Restore script not found in S3"
             aws s3 cp "s3://${S3BucketName}/scripts/backup-monitor.sh" /opt/n8n-scripts/ || echo "Monitor script not found in S3"
             aws s3 cp "s3://${S3BucketName}/scripts/backup-utils.sh" /opt/n8n-scripts/ || echo "Utils script not found in S3"
+            aws s3 cp "s3://${S3BucketName}/scripts/test-backup-system.sh" /opt/n8n-scripts/ || echo "Test script not found in S3"
             
             # Set permissions and environment
             chmod +x /opt/n8n-scripts/*.sh 2>/dev/null || true
@@ -172,6 +173,7 @@ Resources:
             # Create convenient symlinks
             ln -sf /opt/n8n-scripts/backup-utils.sh /usr/local/bin/n8n-backup 2>/dev/null || true
             ln -sf /opt/n8n-scripts/restore-n8n.sh /usr/local/bin/n8n-restore 2>/dev/null || true
+            ln -sf /opt/n8n-scripts/test-backup-system.sh /usr/local/bin/n8n-test-backup 2>/dev/null || true
             
             # Create backup log directory
             mkdir -p /var/log
