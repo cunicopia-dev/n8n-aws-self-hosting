@@ -83,6 +83,10 @@ docker compose --profile postgres up -d
 
 ## AWS Deployment
 
+### Namespaced Deployments
+
+The infrastructure now supports namespaced deployments, allowing you to run separate n8n instances for different clients or environments. Each namespace creates isolated resources with no shared dependencies.
+
 ### Architecture
 
 ```mermaid
@@ -150,6 +154,10 @@ graph TB
 
 > 💰 **Estimated Cost**: With AWS EC2 RIs, you can get a t4g.small for as low as $5 a month. 
 > This setup is ideal for lean, production-grade automation infrastructure without the managed service tax.
+
+### Important: n8n Licensing for Client Deployments
+
+⚠️ **Note**: According to n8n's license, separate instances are required when hosting workloads for different clients. The deployment scripts now support namespaced deployments to ensure compliance.
 
 ### Deployment Steps
 
@@ -221,12 +229,28 @@ aws ssm start-session \
 
 6. Access n8n at http://localhost:5678
 
-#### Option 2: Automated Deployment Script
+#### Option 2: Automated Deployment Script (Recommended)
 
-If you prefer automation, there's a simple deployment script:
+The deployment script now supports namespaced deployments for hosting multiple isolated n8n instances:
+
 ```bash
 cd infra
-./deploy.sh --vpc-id vpc-xxxxxx --subnet-id subnet-xxxxxx
+# Deploy for a specific client/namespace
+./deploy.sh --namespace acme-corp --vpc-id vpc-xxxxxx --subnet-id subnet-xxxxxx
+
+# Deploy another instance for a different client
+./deploy.sh --namespace contoso-ltd --vpc-id vpc-xxxxxx --subnet-id subnet-xxxxxx
+```
+
+Each namespace creates completely isolated resources:
+- Separate EC2 instance
+- Dedicated S3 bucket
+- Isolated IAM roles and permissions
+- Independent n8n installation
+
+To remove a deployment:
+```bash
+./teardown.sh --namespace acme-corp
 ```
 
 ## Project Structure
@@ -243,7 +267,9 @@ n8n-aws-self-hosting/
 └── infra/               # AWS CloudFormation templates
     ├── s3.yaml          # S3 bucket configuration
     ├── ec2.yaml         # EC2 instance configuration
-    └── iam.yaml         # IAM roles and policies
+    ├── iam.yaml         # IAM roles and policies
+    ├── deploy.sh        # Namespaced deployment script
+    └── teardown.sh      # Cleanup script for namespaced deployments
 ```
 
 ## Configuration
