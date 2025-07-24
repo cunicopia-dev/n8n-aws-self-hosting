@@ -56,6 +56,12 @@ aws cloudformation deploy \
 S3_BUCKET_ARN=$(aws cloudformation describe-stacks --stack-name "n8n-${NAMESPACE}-s3" --query 'Stacks[0].Outputs[?OutputKey==`BucketArn`].OutputValue' --output text)
 S3_BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name "n8n-${NAMESPACE}-s3" --query 'Stacks[0].Outputs[?OutputKey==`BucketName`].OutputValue' --output text)
 
+# Upload backup scripts to S3 if they exist
+if [ -d "scripts" ]; then
+    echo "Uploading backup scripts to S3..."
+    aws s3 sync scripts/ "s3://${S3_BUCKET_NAME}/scripts/" --exclude "*" --include "*.sh"
+fi
+
 # Deploy IAM with namespace
 echo "Deploying IAM roles for namespace: $NAMESPACE..."
 aws cloudformation deploy \

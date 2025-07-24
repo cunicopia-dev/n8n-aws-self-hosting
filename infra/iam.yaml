@@ -59,6 +59,17 @@ Resources:
                   - 'logs:PutLogEvents'
                   - 'logs:DescribeLogStreams'
                 Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/ec2/n8n/*'
+        - PolicyName: CloudWatchMetrics
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'cloudwatch:PutMetricData'
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    'cloudwatch:namespace': !Sub 'n8n/${Namespace}'
         - PolicyName: EC2Tags
           PolicyDocument:
             Version: '2012-10-17'
