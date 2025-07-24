@@ -2,16 +2,22 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: 'S3 bucket for n8n file storage'
 
 Parameters:
+  Namespace:
+    Type: String
+    Description: Namespace/client identifier for isolated deployment
+    AllowedPattern: '^[a-z0-9-]+$'
+    ConstraintDescription: Must contain only lowercase letters, numbers, and hyphens
+  
   BucketPrefix:
     Type: String
     Default: n8n-files
-    Description: Prefix for the S3 bucket name (will append account ID and region)
+    Description: Prefix for the S3 bucket name (will append namespace, account ID and region)
 
 Resources:
   N8nFilesBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub '${BucketPrefix}-${AWS::AccountId}-${AWS::Region}'
+      BucketName: !Sub '${BucketPrefix}-${Namespace}-${AWS::AccountId}-${AWS::Region}'
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -31,6 +37,8 @@ Resources:
       Tags:
         - Key: Application
           Value: n8n
+        - Key: Namespace
+          Value: !Ref Namespace
         - Key: ManagedBy
           Value: CloudFormation
 

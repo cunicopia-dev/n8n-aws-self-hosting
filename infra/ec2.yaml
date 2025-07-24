@@ -2,6 +2,12 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: 'EC2 instance with Auto Scaling Group for n8n deployment'
 
 Parameters:
+  Namespace:
+    Type: String
+    Description: Namespace/client identifier for isolated deployment
+    AllowedPattern: '^[a-z0-9-]+$'
+    ConstraintDescription: Must contain only lowercase letters, numbers, and hyphens
+  
   VpcId:
     Type: AWS::EC2::VPC::Id
     Description: VPC ID where the instance will be deployed
@@ -35,7 +41,7 @@ Resources:
   N8nSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: !Sub 'n8n-sg-${AWS::StackName}'
+      GroupName: !Sub 'n8n-${Namespace}-sg'
       GroupDescription: Security group for n8n instance - outbound only
       VpcId: !Ref VpcId
       SecurityGroupEgress:
@@ -44,16 +50,18 @@ Resources:
           Description: Allow all outbound traffic
       Tags:
         - Key: Name
-          Value: !Sub 'n8n-sg-${AWS::StackName}'
+          Value: !Sub 'n8n-${Namespace}-sg'
         - Key: Application
           Value: n8n
+        - Key: Namespace
+          Value: !Ref Namespace
         - Key: ManagedBy
           Value: CloudFormation
 
   N8nLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
-      LaunchTemplateName: !Sub 'n8n-lt-${AWS::StackName}'
+      LaunchTemplateName: !Sub 'n8n-${Namespace}-lt'
       LaunchTemplateData:
         ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}'
         InstanceType: !Ref InstanceType
@@ -78,7 +86,7 @@ Resources:
           - ResourceType: instance
             Tags:
               - Key: Name
-                Value: !Sub 'n8n-instance-${AWS::StackName}'
+                Value: !Sub 'n8n-${Namespace}-instance'
               - Key: Application
                 Value: n8n
               - Key: ManagedBy
@@ -86,7 +94,7 @@ Resources:
           - ResourceType: volume
             Tags:
               - Key: Name
-                Value: !Sub 'n8n-volume-${AWS::StackName}'
+                Value: !Sub 'n8n-${Namespace}-volume'
               - Key: Application
                 Value: n8n
         UserData:
@@ -146,6 +154,54 @@ Resources:
             # Wait for containers to be healthy
             sleep 30
             
+            # Setup backup scripts
+            echo "Setting up automated backups..."
+            mkdir -p /opt/n8n-scripts
+            
+            # Download backup scripts from S3
+            aws s3 cp "s3://${S3BucketName}/scripts/backup-n8n.sh" /opt/n8n-scripts/ || echo "Backup script not found in S3"
+            aws s3 cp "s3://${S3BucketName}/scripts/restore-n8n.sh" /opt/n8n-scripts/ || echo "Restore script not found in S3"
+            aws s3 cp "s3://${S3BucketName}/scripts/backup-monitor.sh" /opt/n8n-scripts/ || echo "Monitor script not found in S3"
+            aws s3 cp "s3://${S3BucketName}/scripts/backup-utils.sh" /opt/n8n-scripts/ || echo "Utils script not found in S3"
+            aws s3 cp "s3://${S3BucketName}/scripts/test-backup-system.sh" /opt/n8n-scripts/ || echo "Test script not found in S3"
+            
+            # Set permissions and environment
+            chmod +x /opt/n8n-scripts/*.sh 2>/dev/null || true
+            echo "export NAMESPACE=${Namespace}" >> /etc/environment
+            echo "export S3_BUCKET=${S3BucketName}" >> /etc/environment
+            
+            # Create convenient symlinks
+            ln -sf /opt/n8n-scripts/backup-utils.sh /usr/local/bin/n8n-backup 2>/dev/null || true
+            ln -sf /opt/n8n-scripts/restore-n8n.sh /usr/local/bin/n8n-restore 2>/dev/null || true
+            ln -sf /opt/n8n-scripts/test-backup-system.sh /usr/local/bin/n8n-test-backup 2>/dev/null || true
+            
+            # Create backup log directory
+            mkdir -p /var/log
+            touch /var/log/n8n-backup.log /var/log/n8n-restore.log /var/log/n8n-backup-monitor.log
+            chown n8n:n8n /var/log/n8n-*.log
+            
+            # Setup cron jobs for n8n user
+            cat > /tmp/n8n-cron <<EOF
+            # Environment variables
+            NAMESPACE=${Namespace}
+            S3_BUCKET=${S3BucketName}
+            PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+            
+            # Daily backup at 2 AM
+            0 2 * * * /opt/n8n-scripts/backup-n8n.sh >> /var/log/n8n-backup.log 2>&1
+            
+            # Backup health check every 6 hours
+            0 */6 * * * /opt/n8n-scripts/backup-monitor.sh >> /var/log/n8n-backup-monitor.log 2>&1
+            EOF
+            
+            # Install cron for n8n user
+            crontab -u n8n /tmp/n8n-cron
+            rm /tmp/n8n-cron
+            
+            # Enable cron service
+            systemctl enable crond
+            systemctl start crond
+            
             # Setup CloudWatch logs
             dnf install -y amazon-cloudwatch-agent
             cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<EOF
@@ -170,7 +226,7 @@ Resources:
   N8nAutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
-      AutoScalingGroupName: !Sub 'n8n-asg-${AWS::StackName}'
+      AutoScalingGroupName: !Sub 'n8n-${Namespace}-asg'
       VPCZoneIdentifier:
         - !Ref SubnetId
       LaunchTemplate:
@@ -183,10 +239,12 @@ Resources:
       HealthCheckGracePeriod: 300
       Tags:
         - Key: Name
-          Value: !Sub 'n8n-asg-instance-${AWS::StackName}'
+          Value: !Sub 'n8n-${Namespace}-asg-instance'
           PropagateAtLaunch: true
         - Key: Application
           Value: n8n
+        - Key: Namespace
+          Value: !Ref Namespace
           PropagateAtLaunch: true
         - Key: ManagedBy
           Value: CloudFormation

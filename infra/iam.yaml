@@ -2,6 +2,12 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: 'IAM roles and policies for n8n EC2 instance'
 
 Parameters:
+  Namespace:
+    Type: String
+    Description: Namespace/client identifier for isolated deployment
+    AllowedPattern: '^[a-z0-9-]+$'
+    ConstraintDescription: Must contain only lowercase letters, numbers, and hyphens
+  
   S3BucketArn:
     Type: String
     Description: ARN of the S3 bucket for n8n files
@@ -14,7 +20,7 @@ Resources:
   N8nInstanceRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub 'n8n-instance-role-${AWS::Region}'
+      RoleName: !Sub 'n8n-${Namespace}-instance-role-${AWS::Region}'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -53,6 +59,17 @@ Resources:
                   - 'logs:PutLogEvents'
                   - 'logs:DescribeLogStreams'
                 Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/ec2/n8n/*'
+        - PolicyName: CloudWatchMetrics
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'cloudwatch:PutMetricData'
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    'cloudwatch:namespace': !Sub 'n8n/${Namespace}'
         - PolicyName: EC2Tags
           PolicyDocument:
             Version: '2012-10-17'
@@ -65,13 +82,15 @@ Resources:
       Tags:
         - Key: Application
           Value: n8n
+        - Key: Namespace
+          Value: !Ref Namespace
         - Key: ManagedBy
           Value: CloudFormation
 
   N8nInstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
-      InstanceProfileName: !Sub 'n8n-instance-profile-${AWS::Region}'
+      InstanceProfileName: !Sub 'n8n-${Namespace}-instance-profile-${AWS::Region}'
       Roles:
         - !Ref N8nInstanceRole
 

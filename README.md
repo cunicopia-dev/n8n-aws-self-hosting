@@ -83,6 +83,10 @@ docker compose --profile postgres up -d
 
 ## AWS Deployment
 
+### Namespaced Deployments
+
+The infrastructure now supports namespaced deployments, allowing you to run separate n8n instances for different clients or environments. Each namespace creates isolated resources with no shared dependencies.
+
 ### Architecture
 
 ```mermaid
@@ -150,6 +154,10 @@ graph TB
 
 > 💰 **Estimated Cost**: With AWS EC2 RIs, you can get a t4g.small for as low as $5 a month. 
 > This setup is ideal for lean, production-grade automation infrastructure without the managed service tax.
+
+### Important: n8n Licensing for Client Deployments
+
+⚠️ **Note**: According to n8n's license, separate instances are required when hosting workloads for different clients. The deployment scripts now support namespaced deployments to ensure compliance.
 
 ### Deployment Steps
 
@@ -221,12 +229,28 @@ aws ssm start-session \
 
 6. Access n8n at http://localhost:5678
 
-#### Option 2: Automated Deployment Script
+#### Option 2: Automated Deployment Script (Recommended)
 
-If you prefer automation, there's a simple deployment script:
+The deployment script now supports namespaced deployments for hosting multiple isolated n8n instances:
+
 ```bash
 cd infra
-./deploy.sh --vpc-id vpc-xxxxxx --subnet-id subnet-xxxxxx
+# Deploy for a specific client/namespace
+./deploy.sh --namespace acme-corp --vpc-id vpc-xxxxxx --subnet-id subnet-xxxxxx
+
+# Deploy another instance for a different client
+./deploy.sh --namespace contoso-ltd --vpc-id vpc-xxxxxx --subnet-id subnet-xxxxxx
+```
+
+Each namespace creates completely isolated resources:
+- Separate EC2 instance
+- Dedicated S3 bucket
+- Isolated IAM roles and permissions
+- Independent n8n installation
+
+To remove a deployment:
+```bash
+./teardown.sh --namespace acme-corp
 ```
 
 ## Project Structure
@@ -243,7 +267,9 @@ n8n-aws-self-hosting/
 └── infra/               # AWS CloudFormation templates
     ├── s3.yaml          # S3 bucket configuration
     ├── ec2.yaml         # EC2 instance configuration
-    └── iam.yaml         # IAM roles and policies
+    ├── iam.yaml         # IAM roles and policies
+    ├── deploy.sh        # Namespaced deployment script
+    └── teardown.sh      # Cleanup script for namespaced deployments
 ```
 
 ## Configuration
@@ -315,88 +341,84 @@ docker compose exec -T postgres psql -U n8n n8n < backup.sql
 
 ### AWS Deployment
 
-**Production Backup Strategy:**
+**Automated Backup Strategy:**
 
-1. **Create a backup script on your EC2 instance:**
+The deployment now includes a comprehensive automated backup system:
+
+- **Daily backups** at 2 AM automatically
+- **30-day retention policy** with automatic cleanup
+- **Backup monitoring** with CloudWatch metrics
+- **Easy restore** with built-in utilities
+- **Backup health checks** every 6 hours
+
+#### Backup Management
+
+Once deployed, you can manage backups using these commands:
 
 ```bash
 # SSH into your instance
 aws ssm start-session --target <instance-id>
 
-# Create backup script
-sudo tee /opt/backup-n8n.sh > /dev/null <<'EOF'
-#!/bin/bash
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-BUCKET_NAME="${S3_BUCKET}"
-BACKUP_FILE="/tmp/n8n_backup_${TIMESTAMP}.sql"
+# List all available backups
+n8n-backup list
 
-# Create PostgreSQL backup
-cd /opt/n8n-aws-self-hosting
-docker compose exec -T postgres pg_dump -U n8n n8n > "$BACKUP_FILE"
+# Show latest backup information
+n8n-backup latest
 
-# Compress the backup
-gzip "$BACKUP_FILE"
+# Create a manual backup immediately
+n8n-backup backup-now
 
-# Upload to S3
-aws s3 cp "${BACKUP_FILE}.gz" "s3://${BUCKET_NAME}/backups/n8n_backup_${TIMESTAMP}.sql.gz"
+# Check backup system status
+n8n-backup status
 
-# Cleanup local file
-rm "${BACKUP_FILE}.gz"
+# Test a backup file (without actually restoring)
+n8n-backup test-restore n8n_backup_acme-corp_20240101_020000.sql.gz
 
-# Keep only last 30 days of backups in S3
-aws s3api list-objects-v2 --bucket "$BUCKET_NAME" --prefix "backups/" \
-  --query 'Contents[?LastModified<=`'$(date -d '30 days ago' --iso-8601)'`].[Key]' \
-  --output text | xargs -I {} aws s3 rm "s3://${BUCKET_NAME}/{}"
-
-echo "Backup completed: n8n_backup_${TIMESTAMP}.sql.gz"
-EOF
-
-# Make executable
-sudo chmod +x /opt/backup-n8n.sh
+# View backup logs
+n8n-backup logs
 ```
 
-2. **Set up automated daily backups with cron:**
+#### Restoring from Backup
 
 ```bash
-# Add to crontab for daily backups at 2 AM
-sudo crontab -e
+# List available backups and select one to restore
+n8n-restore
 
-# Add this line:
-0 2 * * * /opt/backup-n8n.sh >> /var/log/n8n-backup.log 2>&1
+# Restore a specific backup
+n8n-restore n8n_backup_acme-corp_20240101_020000.sql.gz
 ```
 
-3. **Restore from S3 backup:**
+#### Backup Monitoring
 
-```bash
-# List available backups
-aws s3 ls s3://${S3_BUCKET}/backups/
+The system automatically:
+- Creates CloudWatch metrics for backup success/failure
+- Monitors backup age and alerts if backups are missing
+- Logs all backup operations to `/var/log/n8n-backup.log`
+- Tracks backup count and storage usage
 
-# Download and restore a specific backup
-BACKUP_FILE="n8n_backup_20241201_020000.sql.gz"
-aws s3 cp "s3://${S3_BUCKET}/backups/${BACKUP_FILE}" /tmp/
-gunzip "/tmp/${BACKUP_FILE}"
+#### Backup Storage Structure
 
-# Stop n8n, restore database, restart
-cd /opt/n8n-aws-self-hosting
-docker compose down
-docker compose up -d postgres
-sleep 10
-docker compose exec -T postgres psql -U n8n n8n < "/tmp/${BACKUP_FILE%.gz}"
-docker compose up -d n8n
+Backups are stored in your namespace's S3 bucket under:
+```
+s3://n8n-files-{namespace}-{account}-{region}/backups/{namespace}/
+├── n8n_backup_{namespace}_20240101_020000.sql.gz
+├── n8n_backup_{namespace}_20240102_020000.sql.gz
+└── n8n_backup_{namespace}_20240103_020000.sql.gz
 ```
 
-**Weekly Full Instance Backup:**
+#### Optional: EBS Snapshots
 
-For additional safety, consider weekly EBS snapshots of your EC2 volume:
+For additional disaster recovery, you can also create EBS snapshots:
 
 ```bash
-# Create a snapshot via AWS CLI
-INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+# Create a snapshot via AWS CLI (run from your local machine)
+INSTANCE_ID="i-1234567890abcdef0"  # Your instance ID
 VOLUME_ID=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID \
   --query 'Reservations[0].Instances[0].BlockDeviceMappings[0].Ebs.VolumeId' --output text)
 
 aws ec2 create-snapshot --volume-id $VOLUME_ID \
-  --description "n8n Weekly Backup $(date +%Y-%m-%d)"
+  --description "n8n Weekly Backup $(date +%Y-%m-%d)" \
+  --tag-specifications 'ResourceType=snapshot,Tags=[{Key=Name,Value=n8n-backup},{Key=Namespace,Value=your-namespace}]'
 ```
 
 ## Troubleshooting
